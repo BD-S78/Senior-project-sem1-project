@@ -3,6 +3,7 @@
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 #include <cuda_runtime.h>
+#include <sys/time.h>
 
 void run_kernel(int size, const double *x1,const double *y1, const double *x2,const double *y2, double *dist);
 
@@ -35,12 +36,18 @@ void haversine_distance(int size,pybind11::array_t<double> x1_v,pybind11::array_
   assert(y2_v.request().ndim==1);
   assert(dist_v.request().ndim==1);
 
+  timeval t0,t1,t2,t3,t4;
+
+  // GPU memory allocation
+  gettimeofday(&t0, NULL);
   double *d_x1,*d_y1,*d_x2,*d_y2,*d_dist;
   HANDLE_ERROR( cudaMalloc(&d_x1, size * sizeof(double)) );
   HANDLE_ERROR( cudaMalloc(&d_y1, size * sizeof(double)) );
   HANDLE_ERROR( cudaMalloc(&d_x2, size * sizeof(double)) );
   HANDLE_ERROR( cudaMalloc(&d_y2, size * sizeof(double)) );
   HANDLE_ERROR( cudaMalloc(&d_dist, size * sizeof(double)) );
+  gettimeofday(&t1, NULL);
+  calc_time((char*)"GPU malloc",t0,t1);
 
   double* h_x1 = reinterpret_cast<double*>(x1_v.request().ptr);
   double* h_y1 = reinterpret_cast<double*>(y1_v.request().ptr);
@@ -48,23 +55,33 @@ void haversine_distance(int size,pybind11::array_t<double> x1_v,pybind11::array_
   double* h_y2 = reinterpret_cast<double*>(y2_v.request().ptr);
   double* h_dist = reinterpret_cast<double*>(dist_v.request().ptr);
 
+  // CPU -> GPU
+  gettimeofday(&t1, NULL);
   HANDLE_ERROR( cudaMemcpy(d_x1, h_x1, size * sizeof(double), cudaMemcpyHostToDevice) );
   HANDLE_ERROR( cudaMemcpy(d_y1, h_y1, size * sizeof(double), cudaMemcpyHostToDevice) );
   HANDLE_ERROR( cudaMemcpy(d_x2, h_x2, size * sizeof(double), cudaMemcpyHostToDevice) );
   HANDLE_ERROR( cudaMemcpy(d_y2, h_y2, size * sizeof(double), cudaMemcpyHostToDevice) );
+  gettimeofday(&t2, NULL);
+  calc_time((char*)"CPU->GPU transfer",t1,t2);
 
-  //printf("before\n");
+  // kernel
+  gettimeofday(&t2, NULL);
   run_kernel(size,d_x1,d_y1,d_x2,d_y2,d_dist);
-  //printf("after\n");
+  cudaDeviceSynchronize();
+  gettimeofday(&t3, NULL);
+  calc_time((char*)"kernel",t2,t3);
 
+  // GPU -> CPU
+  gettimeofday(&t3, NULL);
   HANDLE_ERROR( cudaMemcpy(h_dist, d_dist, size * sizeof(double), cudaMemcpyDeviceToHost) );
+  gettimeofday(&t4, NULL);
+  calc_time((char*)"GPU->CPU transfer",t3,t4);
 
   HANDLE_ERROR( cudaFree(d_x1) );
   HANDLE_ERROR( cudaFree(d_y1) );
   HANDLE_ERROR( cudaFree(d_x2) );
   HANDLE_ERROR( cudaFree(d_y2) );
   HANDLE_ERROR( cudaFree(d_dist) );
-
 }
 
 PYBIND11_MODULE(haversine_library, m)
