@@ -1,8 +1,10 @@
 #include <iostream>
+#include <vector>
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 #include <cuda_runtime.h>
+#include <sys/time.h>
 
 void run_kernel(int size, const double *x1,const double *y1, const double *x2,const double *y2, double *dist);
 
@@ -26,6 +28,9 @@ static void HandleError( cudaError_t err,
 }
 #define HANDLE_ERROR( err ) (HandleError( err, __FILE__, __LINE__ ))
 
+// Timings of the last call: GPU malloc, CPU->GPU, kernel, GPU->CPU (ms)
+static std::vector<float> g_last_times;
+
 void haversine_distance(int size,pybind11::array_t<double> x1_v,pybind11::array_t<double> y1_v,
     pybind11::array_t<double> x2_v,pybind11::array_t<double> y2_v,pybind11::array_t<double> dist_v)
 {
@@ -36,11 +41,18 @@ void haversine_distance(int size,pybind11::array_t<double> x1_v,pybind11::array_
   assert(dist_v.request().ndim==1);
 
   double *d_x1,*d_y1,*d_x2,*d_y2,*d_dist;
+  timeval t0, t1;
+
+  g_last_times.clear();
+
+  gettimeofday(&t0, NULL);
   HANDLE_ERROR( cudaMalloc(&d_x1, size * sizeof(double)) );
   HANDLE_ERROR( cudaMalloc(&d_y1, size * sizeof(double)) );
   HANDLE_ERROR( cudaMalloc(&d_x2, size * sizeof(double)) );
   HANDLE_ERROR( cudaMalloc(&d_y2, size * sizeof(double)) );
   HANDLE_ERROR( cudaMalloc(&d_dist, size * sizeof(double)) );
+  gettimeofday(&t1, NULL);
+  g_last_times.push_back(calc_time((char*)"GPU malloc", t0, t1));
 
   double* h_x1 = reinterpret_cast<double*>(x1_v.request().ptr);
   double* h_y1 = reinterpret_cast<double*>(y1_v.request().ptr);
@@ -48,16 +60,26 @@ void haversine_distance(int size,pybind11::array_t<double> x1_v,pybind11::array_
   double* h_y2 = reinterpret_cast<double*>(y2_v.request().ptr);
   double* h_dist = reinterpret_cast<double*>(dist_v.request().ptr);
 
+  gettimeofday(&t0, NULL);
   HANDLE_ERROR( cudaMemcpy(d_x1, h_x1, size * sizeof(double), cudaMemcpyHostToDevice) );
   HANDLE_ERROR( cudaMemcpy(d_y1, h_y1, size * sizeof(double), cudaMemcpyHostToDevice) );
   HANDLE_ERROR( cudaMemcpy(d_x2, h_x2, size * sizeof(double), cudaMemcpyHostToDevice) );
   HANDLE_ERROR( cudaMemcpy(d_y2, h_y2, size * sizeof(double), cudaMemcpyHostToDevice) );
+  gettimeofday(&t1, NULL);
+  g_last_times.push_back(calc_time((char*)"CPU->GPU transfer", t0, t1));
 
+  gettimeofday(&t0, NULL);
   //printf("before\n");
   run_kernel(size,d_x1,d_y1,d_x2,d_y2,d_dist);
+  cudaDeviceSynchronize();
   //printf("after\n");
+  gettimeofday(&t1, NULL);
+  g_last_times.push_back(calc_time((char*)"kernel", t0, t1));
 
+  gettimeofday(&t0, NULL);
   HANDLE_ERROR( cudaMemcpy(h_dist, d_dist, size * sizeof(double), cudaMemcpyDeviceToHost) );
+  gettimeofday(&t1, NULL);
+  g_last_times.push_back(calc_time((char*)"GPU->CPU transfer", t0, t1));
 
   HANDLE_ERROR( cudaFree(d_x1) );
   HANDLE_ERROR( cudaFree(d_y1) );
@@ -70,4 +92,5 @@ void haversine_distance(int size,pybind11::array_t<double> x1_v,pybind11::array_
 PYBIND11_MODULE(haversine_library, m)
 {
   m.def("haversine_distance", haversine_distance);
+  m.def("last_timings", []() { return g_last_times; });
 }
