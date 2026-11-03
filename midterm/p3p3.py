@@ -4,7 +4,7 @@ import time
 import pandas as pd
 
 path = '/tmp/tlcdata/yellow_tripdata_2009-01.parquet'
-csv_path = '/tmp/tlcdata/converted.csv'
+csv_path = '/tmp/converted.csv'  # /tmp/tlcdata is read-only on the GPU server
 
 t0 = time.perf_counter()
 df = pd.read_parquet(path)
